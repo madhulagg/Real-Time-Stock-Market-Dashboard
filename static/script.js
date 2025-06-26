@@ -2,6 +2,7 @@ document.addEventListener("DOMContentLoaded", function () {
   const form = document.getElementById("stock-form");
   const chartCanvas = document.getElementById("priceChart");
   const portfolioDiv = document.getElementById("portfolio-info");
+  let chartInstance;
 
   form.addEventListener("submit", async function (e) {
     e.preventDefault();
@@ -18,16 +19,13 @@ document.addEventListener("DOMContentLoaded", function () {
     });
 
     const data = await res.json();
-
-    if (data.error) {
-      alert(data.error);
-      return;
-    }
+    if (data.error) return alert(data.error);
 
     const labels = Object.keys(data.prices);
     const values = Object.values(data.prices);
 
-    new Chart(chartCanvas, {
+    if (chartInstance) chartInstance.destroy();
+    chartInstance = new Chart(chartCanvas, {
       type: "line",
       data: {
         labels: labels,
@@ -36,14 +34,23 @@ document.addEventListener("DOMContentLoaded", function () {
           data: values,
           borderColor: "blue",
           borderWidth: 2,
-          fill: false,
+          pointBackgroundColor: labels.map(d => {
+            const s = data.signals[d];
+            if (s === "BUY") return "green";
+            if (s === "SELL") return "red";
+            return "blue";
+          }),
+          pointRadius: 5
         }]
       },
+      options: {
+        responsive: true
+      }
     });
 
     portfolioDiv.innerHTML = `
-      <p>💰 Cash: $${data.portfolio.cash}</p>
-      <p>📈 Total Value: $${data.portfolio.total_value}</p>
+      <p>💰 Cash: ₹${data.portfolio.cash}</p>
+      <p>📈 Total Value: ₹${data.portfolio.total_value}</p>
       <p>📦 Holdings: ${JSON.stringify(data.portfolio.holdings)}</p>
     `;
   });
