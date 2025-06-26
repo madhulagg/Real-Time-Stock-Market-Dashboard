@@ -1,120 +1,117 @@
+from flask import Flask, render_template, request, jsonify
 import yfinance as yf
+from simulate import simulate, get_individual_stock_performance, SENSEX_30
 import pandas as pd
-from strategies import sma_crossover, momentum_strategy, rsi_strategy
-from utils import load_portfolio, save_portfolio
-import matplotlib.pyplot as plt
 
-INITIAL_CASH = 2000000
-SENSEX_30 = [
-    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS",
-    "HINDUNILVR.NS", "ITC.NS", "LT.NS", "SBIN.NS", "BAJFINANCE.NS",
-    "ASIANPAINT.NS", "AXISBANK.NS", "HCLTECH.NS", "KOTAKBANK.NS", "MARUTI.NS",
-    "SUNPHARMA.NS", "NTPC.NS", "ULTRACEMCO.NS", "NESTLEIND.NS", "TITAN.NS",
-    "POWERGRID.NS", "WIPRO.NS", "TECHM.NS", "BAJAJFINSV.NS", "JSWSTEEL.NS",
-    "M&M.NS", "TATASTEEL.NS", "BHARTIARTL.NS", "HDFCLIFE.NS", "ONGC.NS"
-]
+app = Flask(__name__)
 
-def fetch_price_data(symbols, period="6mo"):
-    data = yf.download(symbols, period=period, group_by='ticker', auto_adjust=True)
-    price_data = {}
-    for symbol in symbols:
-        df = data[symbol] if isinstance(data.columns, pd.MultiIndex) else data
-        if 'Close' in df:
-            df = df.reset_index()
-            price_data[symbol] = {row['Date'].strftime("%Y-%m-%d"): float(row['Close']) for _, row in df.iterrows()}
-    return price_data
+@app.route("/")
+def home():
+    return render_template("index.html")
 
-def combine_signals(date, strategy_outputs):
-    votes = [signals.get(date, "HOLD") for signals in strategy_outputs]
-    return votes.count("BUY"), votes.count("SELL")
+@app.route("/api/portfolio-overview")
+def portfolio_overview():
+    period = request.args.get("period", "6mo")
+    
+    # Get portfolio performance
+    portfolio_perf = simulate(period=period)
+    
+    # Get individual stock performances
+    stock_performances = []
+    for symbol in SENSEX_30:
+        perf = get_individual_stock_performance(symbol, period)
+        if perf:
+            stock_performances.append(perf)
+    
+    # Sort by return percentage
+    stock_performances.sort(key=lambda x: x["total_return_pct"], reverse=True)
+    
+    return jsonify({
+        "portfolio": portfolio_perf,
+        "stocks": stock_performances,
+        "total_stocks": len(stock_performances)
+    })
 
+@app.route("/api/stock-analysis")
+def stock_analysis():
+    symbol = request.args.get("symbol", "RELIANCE.NS")
+    period = request.args.get("period", "6mo")
+    
+    # Get individual stock performance
+    stock_perf = get_individual_stock_performance(symbol, period)
+    
+    if not stock_perf:
+        return jsonify({"error": "Unable to fetch data for this stock"}), 400
+    
+    return jsonify(stock_perf)
 
-def plot_portfolio_history(portfolio_history):
-    dates = [entry["date"] for entry in portfolio_history]
-    values = [entry["total_value"] for entry in portfolio_history]
+@app.route("/compare")
+def compare():
+    symbol = request.args.get("symbol", "RELIANCE.NS")
+    
+    # Simulate our strategy (returns history)
+    history = simulate(period="6mo", return_history=True)
+    dates = [entry["date"] for entry in history]
+    strategy_values = [entry["total"] for entry in history]
 
-    plt.figure(figsize=(10, 5))
-    plt.plot(dates, values, label="Your Strategy", linewidth=2)
-    plt.title("📈 Portfolio Value Over Time")
-    plt.xlabel("Date")
-    plt.ylabel("Portfolio Value (₹)")
-    plt.grid(True)
-    plt.xticks(rotation=45)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
+    # Fetch stock price data
+    df = yf.download(symbol, period="6mo", interval="1d", progress=False)
+    df = df.reset_index()
+    df = df[df["Date"].isin(pd.to_datetime(dates))]  # Align with strategy dates
+    stock_prices = df["Adj Close" if "Adj Close" in df.columns else "Close"].tolist()
+    stock_dates = df["Date"].dt.strftime("%Y-%m-%d").tolist()
 
+    # Normalize both to start at 100
+    def normalize(values):
+        base = values[0]
+        return [round((v / base) * 100, 2) for v in values]
 
-def simulate_sensex_strategy(period="6mo"):
-    price_data = fetch_price_data(SENSEX_30, period)
-    dates = sorted(list(next(iter(price_data.values())).keys()))
+    strategy_norm = normalize(strategy_values)
+    stock_norm = normalize(stock_prices)
 
-    signals = {}
-    for stock in SENSEX_30:
-        if stock in price_data:
-            signals[stock] = {
-                'sma': sma_crossover(price_data[stock]),
-                'momentum': momentum_strategy(price_data[stock]),
-                'rsi': rsi_strategy(price_data[stock])
-            }
+    return jsonify({
+        "dates": stock_dates,
+        "strategy": strategy_norm,
+        "stock": stock_norm
+    })
 
-    portfolio = {"cash": INITIAL_CASH, "holdings": {}, "history": []}
-
-    for date in dates:
-        # First: sell all stocks with ≥2 sell votes
-        for stock in SENSEX_30:
-            if stock in price_data and date in price_data[stock]:
-                _, sell_votes = combine_signals(date, [signals[stock]['sma'], signals[stock]['momentum'], signals[stock]['rsi']])
-                if sell_votes >= 2:
-                    shares = portfolio["holdings"].get(stock, 0)
-                    if shares > 0:
-                        portfolio["cash"] += shares * price_data[stock][date]
-                        portfolio["holdings"][stock] = 0
-
-        # Then: count how many BUYs today
-        buy_candidates = []
-        for stock in SENSEX_30:
-            if stock in price_data and date in price_data[stock]:
-                buy_votes, _ = combine_signals(date, [signals[stock]['sma'], signals[stock]['momentum'], signals[stock]['rsi']])
-                if buy_votes >= 2:
-                    buy_candidates.append(stock)
-
-        # Distribute cash equally among buy candidates
-        if buy_candidates:
-            budget_per_stock = portfolio["cash"] / len(buy_candidates)
-            for stock in buy_candidates:
-                price = price_data[stock][date]
-                if price > 0:
-                    num_shares = int(budget_per_stock // price)
-                    if num_shares > 0:
-                        cost = num_shares * price
-                        portfolio["cash"] -= cost
-                        portfolio["holdings"][stock] = portfolio["holdings"].get(stock, 0) + num_shares
-
-        # Log portfolio value
-        total_val = portfolio["cash"]
-        for stock in SENSEX_30:
-            if stock in price_data and date in price_data[stock]:
-                total_val += portfolio["holdings"].get(stock, 0) * price_data[stock][date]
-
-        portfolio["history"].append({
-            "date": date,
-            "cash": round(portfolio["cash"], 2),
-            "total_value": round(total_val, 2)
-        })
-
-    save_portfolio(portfolio)
-
-    final = portfolio["history"][-1]["total_value"]
-    profit = final - INITIAL_CASH
-    return_pct = (profit / INITIAL_CASH) * 100
-
-    print(f"\n✅ Final Portfolio Value: ₹{final:,.2f}")
-    print(f"📈 Total Profit: ₹{profit:,.2f}")
-    print(f"📊 Return: {return_pct:.2f}%")
-    plot_portfolio_history(portfolio["history"])
-
+@app.route("/api/strategy-comparison")
+def strategy_comparison():
+    period = request.args.get("period", "6mo")
+    
+    # Get portfolio performance with our 3-strategy approach
+    portfolio_perf = simulate(period=period)
+    
+    # Calculate buy-and-hold performance for Sensex
+    try:
+        # Use a representative index or calculate average of all stocks
+        sensex_data = yf.download("^BSESN", period=period, progress=False)
+        if len(sensex_data) > 0:
+            initial_sensex = sensex_data.iloc[0]["Close"]
+            final_sensex = sensex_data.iloc[-1]["Close"]
+            sensex_return_pct = ((final_sensex - initial_sensex) / initial_sensex) * 100
+            buy_hold_return = (sensex_return_pct / 100) * 2000000
+        else:
+            sensex_return_pct = 0
+            buy_hold_return = 0
+    except:
+        sensex_return_pct = 0
+        buy_hold_return = 0
+    
+    return jsonify({
+        "strategy_performance": {
+            "initial": portfolio_perf["initial"],
+            "final": portfolio_perf["final"],
+            "return": portfolio_perf["return"],
+            "return_pct": portfolio_perf["return_pct"]
+        },
+        "buy_hold_performance": {
+            "initial": 2000000,
+            "final": 2000000 + buy_hold_return,
+            "return": buy_hold_return,
+            "return_pct": sensex_return_pct
+        }
+    })
 
 if __name__ == "__main__":
-    simulate_sensex_strategy(period="6mo")
-
+    app.run(debug=True)

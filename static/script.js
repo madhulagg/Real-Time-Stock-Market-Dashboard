@@ -1,57 +1,50 @@
-document.addEventListener("DOMContentLoaded", function () {
-  const form = document.getElementById("stock-form");
-  const chartCanvas = document.getElementById("priceChart");
-  const portfolioDiv = document.getElementById("portfolio-info");
-  let chartInstance;
+let chart;
 
-  form.addEventListener("submit", async function (e) {
-    e.preventDefault();
-    const symbol = document.getElementById("symbol").value;
-    const strategy = document.getElementById("strategy").value;
+async function fetchData(symbol) {
+  const response = await fetch(`/compare?symbol=${symbol}`);
+  return await response.json();
+}
 
-    const formData = new FormData();
-    formData.append("symbol", symbol);
-    formData.append("strategy", strategy);
+function renderChart(dates, strategy, stock, label) {
+  const ctx = document.getElementById("strategyChart").getContext("2d");
+  if (chart) chart.destroy();
 
-    const res = await fetch("/stock", {
-      method: "POST",
-      body: formData,
-    });
-
-    const data = await res.json();
-    if (data.error) return alert(data.error);
-
-    const labels = Object.keys(data.prices);
-    const values = Object.values(data.prices);
-
-    if (chartInstance) chartInstance.destroy();
-    chartInstance = new Chart(chartCanvas, {
-      type: "line",
-      data: {
-        labels: labels,
-        datasets: [{
-          label: symbol + " Closing Price",
-          data: values,
-          borderColor: "blue",
-          borderWidth: 2,
-          pointBackgroundColor: labels.map(d => {
-            const s = data.signals[d];
-            if (s === "BUY") return "green";
-            if (s === "SELL") return "red";
-            return "blue";
-          }),
-          pointRadius: 5
-        }]
-      },
-      options: {
-        responsive: true
+  chart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: dates,
+      datasets: [
+        {
+          label: "Your Strategy",
+          data: strategy,
+          borderColor: "#2e86de",
+          fill: false,
+          tension: 0.3
+        },
+        {
+          label: label,
+          data: stock,
+          borderColor: "#e74c3c",
+          fill: false,
+          tension: 0.3
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      scales: {
+        x: { ticks: { maxTicksLimit: 10 } },
+        y: { beginAtZero: false }
       }
-    });
-
-    portfolioDiv.innerHTML = `
-      <p>💰 Cash: ₹${data.portfolio.cash}</p>
-      <p>📈 Total Value: ₹${data.portfolio.total_value}</p>
-      <p>📦 Holdings: ${JSON.stringify(data.portfolio.holdings)}</p>
-    `;
+    }
   });
-});
+}
+
+async function updateChart() {
+  const symbol = document.getElementById("stockSelect").value;
+  const data = await fetchData(symbol);
+  renderChart(data.dates, data.strategy, data.stock, symbol);
+}
+
+// Auto-load default
+updateChart();
