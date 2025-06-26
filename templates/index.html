@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Real-Time Stock Tracker</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px;
+      text-align: center;
+    }
+    form {
+      margin-bottom: 30px;
+    }
+    canvas {
+      margin: 20px auto;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>📈 Real-Time Stock Tracker</h1>
+
+  <form id="stock-form">
+    <input type="text" id="symbol" name="symbol" placeholder="Enter Stock Symbol" required>
+    <select id="strategy" name="strategy">
+      <option value="sma">SMA Crossover</option>
+      <option value="rsi">RSI</option>
+      <option value="mean">Mean Reversion</option>
+    </select>
+    <button type="submit">Track</button>
+  </form>
+
+  <canvas id="priceChart" width="600" height="400"></canvas>
+
+  <div id="portfolio-info" style="margin-top: 20px;"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="/static/script.js"></script>
+</body>
+</html>
